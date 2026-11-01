@@ -1,0 +1,6 @@
+{
+  "name": "UrbanCraft 5D - City Builder & Planner Game",
+  "description": "An architectural 2D/3D city design and management simulation game inspired by Planner 5D. Plan zones, build skylines, manage civic services, and watch your metropolis come alive.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
