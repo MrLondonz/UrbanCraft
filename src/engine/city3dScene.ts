@@ -3,6 +3,7 @@
  * Realistic materials, soft shadows, physical sun & sky, and Planner 5D-grade navigation.
  */
 import * as THREE from 'three';
+import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { PlacedBuilding, TimeOfDay, ViewPerspective, CutawayFloor, CameraPreset, RenderQuality } from '../types/city';
 import { BUILDING_MAP } from '../data/buildingsCatalog';
 import { VEHICLE_MAP } from '../data/vehiclesCatalog';
@@ -13,6 +14,8 @@ export interface SceneInteractionCallbacks {
   onTileHover?: (coord: { x: number; z: number } | null) => void;
   onTileClick?: (coord: { x: number; z: number }) => void;
   onBuildingClick?: (building: PlacedBuilding) => void;
+  onBuildingMove?: (instanceId: string, x: number, z: number, y?: number) => void;
+  onCameraAngleChange?: (angleH: number, angleV: number) => void;
   onContextLost?: () => void;
   onFirstPersonExit?: () => void;
 }
@@ -72,6 +75,9 @@ export class City3DScene {
   private animatedProps: Array<{ mesh: THREE.Object3D; update: (dt: number, time: number) => void }> = [];
   private ghostMesh: THREE.Group | null = null;
   private selectionBox: THREE.Mesh | null = null;
+  private transformControls: TransformControls | null = null;
+  public isTransforming: boolean = false;
+  private selectedBuildingInstanceId: string | null = null;
 
   // Vehicles
   private vehicleGroup: THREE.Group = new THREE.Group();
@@ -185,6 +191,46 @@ export class City3DScene {
     // Add vehicles group
     this.scene.add(this.vehicleGroup);
 
+    // 7.5 TransformControls setup for 3D translation & manipulation
+    try {
+      this.transformControls = new TransformControls(this.camera, this.renderer.domElement);
+      this.transformControls.setMode('translate');
+      this.transformControls.setTranslationSnap(1.0); // 1 meter snapping
+      this.transformControls.size = 0.85;
+      const helper = (this.transformControls as any).getHelper ? (this.transformControls as any).getHelper() : this.transformControls;
+      this.scene.add(helper);
+
+      this.transformControls.addEventListener('dragging-changed', (event: any) => {
+        this.isTransforming = !!event.value;
+        if (!event.value && this.selectedBuildingInstanceId) {
+          const group = this.buildingMeshes.get(this.selectedBuildingInstanceId);
+          if (group) {
+            const coord = this.worldToCoord(group.position.x, group.position.z);
+            if (this.callbacks.onBuildingMove) {
+              this.callbacks.onBuildingMove(this.selectedBuildingInstanceId, coord.x, coord.z, group.position.y);
+            }
+          }
+        }
+      });
+
+      this.transformControls.addEventListener('change', () => {
+        if (this.isTransforming && this.selectedBuildingInstanceId) {
+          const group = this.buildingMeshes.get(this.selectedBuildingInstanceId);
+          if (group) {
+            const coord = this.worldToCoord(group.position.x, group.position.z);
+            if (this.selectionBox) {
+              this.selectionBox.position.set(group.position.x, this.selectionBox.position.y, group.position.z);
+            }
+            if (this.callbacks.onTileHover) {
+              this.callbacks.onTileHover(coord);
+            }
+          }
+        }
+      });
+    } catch (err) {
+      console.warn('TransformControls setup error:', err);
+    }
+
     // Event listeners
     this.bindEvents();
 
@@ -201,6 +247,10 @@ export class City3DScene {
 
     this.camera.position.set(x, y, z);
     this.camera.lookAt(this.cameraTarget);
+
+    if (this.callbacks.onCameraAngleChange) {
+      this.callbacks.onCameraAngleChange(this.cameraAngleH, this.cameraAngleV);
+    }
   }
 
   public setViewPerspective(mode: ViewPerspective) {
@@ -257,6 +307,11 @@ export class City3DScene {
 
   public setCameraPreset(preset: CameraPreset) {
     switch (preset) {
+      case 'perspective':
+        this.cameraAngleH = 0.62;
+        this.cameraAngleV = 0.54;
+        this.cameraDistance = 36;
+        break;
       case 'top':
         this.cameraAngleH = 0;
         this.cameraAngleV = Math.PI / 2 - 0.01;
@@ -432,6 +487,7 @@ export class City3DScene {
   }
 
   private onPointerDown(e: PointerEvent) {
+    if (this.isTransforming) return;
     this.isPointerDown = true;
     this.lastPointerX = e.clientX;
     this.lastPointerY = e.clientY;
@@ -440,6 +496,7 @@ export class City3DScene {
   }
 
   private onPointerMove(e: PointerEvent) {
+    if (this.isTransforming) return;
     const rect = this.renderer.domElement.getBoundingClientRect();
     this.mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
     this.mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
@@ -505,6 +562,11 @@ export class City3DScene {
   }
 
   private onPointerUp(_e: PointerEvent) {
+    if (this.isTransforming) {
+      this.isPointerDown = false;
+      this.isDraggingToPan = false;
+      return;
+    }
     if (!this.isDraggingToPan && this.pointerButton === 0) {
       const clickedCoord = this.getGridCoordFromMouse();
       if (clickedCoord) {
@@ -576,6 +638,16 @@ export class City3DScene {
     return {
       x: x * this.tileSize - halfSize + this.tileSize / 2,
       z: z * this.tileSize - halfSize + this.tileSize / 2,
+    };
+  }
+
+  public worldToCoord(wx: number, wz: number): { x: number; z: number } {
+    const halfSize = (this.gridSize * this.tileSize) / 2;
+    const gx = Math.round((wx + halfSize - this.tileSize / 2) / this.tileSize);
+    const gz = Math.round((wz + halfSize - this.tileSize / 2) / this.tileSize);
+    return {
+      x: Math.max(0, Math.min(this.gridSize - 1, gx)),
+      z: Math.max(0, Math.min(this.gridSize - 1, gz)),
     };
   }
 
@@ -991,6 +1063,45 @@ export class City3DScene {
         winBack.position.set(wx, floorY + floorH * 0.52, -d / 2 - 0.02);
         winBack.rotation.y = Math.PI;
         group.add(winBack);
+      }
+
+      // Architectural Cantilevered Balconies (Stage 2)
+      if (building.balcony !== false && f >= 2 && f <= floors) {
+        const balconyW = Math.min(w * 0.52, 2.2);
+        const balconyD = 0.38;
+        const balconySlab = new THREE.Mesh(
+          new THREE.BoxGeometry(balconyW, 0.08, balconyD),
+          floorSlabMat
+        );
+        balconySlab.position.set(0, floorY + 0.04, d / 2 + balconyD / 2);
+        balconySlab.castShadow = true;
+        balconySlab.userData = { floorLevel: f };
+        group.add(balconySlab);
+
+        const railH = 0.28;
+        const railFront = new THREE.Mesh(
+          new THREE.BoxGeometry(balconyW, railH, 0.02),
+          glassMat
+        );
+        railFront.position.set(0, floorY + 0.08 + railH / 2, d / 2 + balconyD);
+        railFront.userData = { floorLevel: f };
+        group.add(railFront);
+
+        const railSideL = new THREE.Mesh(
+          new THREE.BoxGeometry(0.02, railH, balconyD),
+          frameMat
+        );
+        railSideL.position.set(-balconyW / 2, floorY + 0.08 + railH / 2, d / 2 + balconyD / 2);
+        railSideL.userData = { floorLevel: f };
+        group.add(railSideL);
+
+        const railSideR = new THREE.Mesh(
+          new THREE.BoxGeometry(0.02, railH, balconyD),
+          frameMat
+        );
+        railSideR.position.set(balconyW / 2, floorY + 0.08 + railH / 2, d / 2 + balconyD / 2);
+        railSideR.userData = { floorLevel: f };
+        group.add(railSideR);
       }
     }
 
@@ -1860,10 +1971,26 @@ export class City3DScene {
       this.selectionBox = null;
     }
 
-    if (!building) return;
+    if (!building) {
+      if (this.transformControls) {
+        this.transformControls.detach();
+      }
+      this.selectedBuildingInstanceId = null;
+      return;
+    }
 
+    this.selectedBuildingInstanceId = building.instanceId;
     const group = this.buildingMeshes.get(building.instanceId);
-    if (!group) return;
+    if (!group) {
+      if (this.transformControls) {
+        this.transformControls.detach();
+      }
+      return;
+    }
+
+    if (this.transformControls && !this.isFirstPersonMode && !this.is2DMode) {
+      this.transformControls.attach(group);
+    }
 
     const box = new THREE.Box3().setFromObject(group);
     const size = new THREE.Vector3();
@@ -1953,6 +2080,10 @@ export class City3DScene {
   }
 
   public dispose() {
+    if (this.transformControls) {
+      this.transformControls.dispose();
+      this.transformControls = null;
+    }
     if (this.animationFrameId) {
       cancelAnimationFrame(this.animationFrameId);
     }

@@ -11,12 +11,33 @@ export interface CityTemplate {
 
 export const CITY_TEMPLATES: CityTemplate[] = [
   {
-    id: 'metropolis_bay',
-    name: 'Metropolis Bay',
-    tagline: 'High-Density Coastal Hub',
-    description: 'A thriving urban metropolis with towering commercial skyscrapers, tree-lined boulevards, central plaza, and civic services.',
-    startingFunds: 12500,
+    id: 'downtown_block_a',
+    name: 'Downtown Block A',
+    tagline: 'Urban Architectural District',
+    description: 'A realistic downtown city block featuring modern architectural residential towers, balconies, tree-lined boulevards, crosswalks, and retail plazas.',
+    startingFunds: 25000,
     buildings: [
+      // Central Hero Architectural Building (Building_006 in screenshot)
+      {
+        instanceId: 'b_006',
+        defId: 'res_condo',
+        customName: 'Building_006',
+        x: 10,
+        z: 11,
+        rotation: 0,
+        level: 3,
+        color: '#b0b0b0',
+        customWidth: 3,
+        customDepth: 3,
+        customHeightFloors: 6,
+        materialFinish: 'concrete',
+        roofStyle: 'flat',
+        windowsStyle: 'modern_glass',
+        balcony: true,
+        placedAt: 1,
+        powered: true,
+        watered: true,
+      },
       // Major Roads Main Grid
       { instanceId: 'r1', defId: 'road_avenue', x: 12, z: 6, rotation: 0, level: 1, color: '#1e293b', placedAt: 1, powered: true, watered: true },
       { instanceId: 'r2', defId: 'road_avenue', x: 12, z: 7, rotation: 0, level: 1, color: '#1e293b', placedAt: 1, powered: true, watered: true },

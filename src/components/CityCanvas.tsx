@@ -27,6 +27,8 @@ interface CityCanvasProps {
   onTileClick: (coord: { x: number; z: number }) => void;
   onTileHover?: (coord: { x: number; z: number } | null) => void;
   onBuildingClick: (building: PlacedBuilding) => void;
+  onBuildingMove?: (instanceId: string, x: number, z: number, y?: number) => void;
+  onCameraAngleChange?: (angleH: number, angleV: number) => void;
   onExitFirstPerson?: () => void;
 }
 
@@ -43,6 +45,8 @@ export const CityCanvas = forwardRef<CityCanvasHandle, CityCanvasProps>(({
   onTileClick,
   onTileHover,
   onBuildingClick,
+  onBuildingMove,
+  onCameraAngleChange,
   onExitFirstPerson,
 }, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -76,6 +80,8 @@ export const CityCanvas = forwardRef<CityCanvasHandle, CityCanvasProps>(({
           onTileClick,
           onTileHover,
           onBuildingClick,
+          onBuildingMove,
+          onCameraAngleChange,
           onFirstPersonExit: () => {
             if (onExitFirstPerson) {
               onExitFirstPerson();
@@ -112,7 +118,7 @@ export const CityCanvas = forwardRef<CityCanvasHandle, CityCanvasProps>(({
         canvas2dRef.current = null;
       }
     };
-  }, [use2dFallback, onTileClick, onTileHover, onBuildingClick, onExitFirstPerson]);
+  }, [use2dFallback, onTileClick, onTileHover, onBuildingClick, onBuildingMove, onCameraAngleChange, onExitFirstPerson]);
 
   // Sync buildings
   useEffect(() => {

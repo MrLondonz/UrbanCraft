@@ -4,7 +4,7 @@
  */
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { CITY_TEMPLATES } from './data/templates';
-import { BUILDING_MAP } from './data/buildingsCatalog';
+import { BUILDING_MAP, BUILDINGS_CATALOG } from './data/buildingsCatalog';
 import { VEHICLES_CATALOG } from './data/vehiclesCatalog';
 import {
   BuildingDefinition,
@@ -18,31 +18,30 @@ import {
   MeasurementUnit,
   CameraPreset,
   RenderQuality,
-  SnappingMode,
 } from './types/city';
 import { useCitySimulation } from './hooks/useCitySimulation';
 import { sound } from './utils/audio';
 
 import { TopBar } from './components/TopBar';
-import { HudBar } from './components/HudBar';
-import { Toolbar } from './components/Toolbar';
-import { CatalogDrawer } from './components/CatalogDrawer';
-import { PlannerSidebarLeft } from './components/PlannerSidebarLeft';
+import { PlannerSidebarLeft, StudioTool } from './components/PlannerSidebarLeft';
 import { PlannerPropertiesRight } from './components/PlannerPropertiesRight';
 import { PlannerMinimap } from './components/PlannerMinimap';
+import { ViewportCameraControls } from './components/ViewportCameraControls';
+import { ViewportGizmo } from './components/ViewportGizmo';
+import { BottomStatusBar } from './components/BottomStatusBar';
+import { CityCanvas, CityCanvasHandle } from './components/CityCanvas';
+
+import { CatalogDrawer } from './components/CatalogDrawer';
 import { InteriorStudioModal } from './components/InteriorStudioModal';
 import { PolicyModal } from './components/PolicyModal';
 import { MilestonesModal } from './components/MilestonesModal';
 import { TemplatesModal } from './components/TemplatesModal';
 import { PhotoModal } from './components/PhotoModal';
-import { NewsTicker } from './components/NewsTicker';
 import { VehiclesModal } from './components/VehiclesModal';
 import { CustomBuildingModal } from './components/CustomBuildingModal';
-import { BottomStatusBar } from './components/BottomStatusBar';
-import { CityCanvas, CityCanvasHandle } from './components/CityCanvas';
 
 export default function App() {
-  const initialTemplate = CITY_TEMPLATES[0]; // Metropolis Bay
+  const initialTemplate = CITY_TEMPLATES[0]; // Downtown Block A
 
   // City simulation state
   const {
@@ -77,38 +76,34 @@ export default function App() {
     paveRoadSegment,
   } = useCitySimulation(initialTemplate.buildings, initialTemplate.startingFunds);
 
-  // Interaction & UI State
+  // Studio Tools state (matching user screenshot)
+  const [currentStudioTool, setCurrentStudioTool] = useState<StudioTool>('place_building');
+  const [selectedDef, setSelectedDef] = useState<BuildingDefinition | null>(
+    BUILDING_MAP.get('res_condo') || BUILDINGS_CATALOG[0]
+  );
   const [toolMode, setToolMode] = useState<ToolMode>('plan');
-  const [selectedDef, setSelectedDef] = useState<BuildingDefinition | null>(null);
   const [rotation, setRotation] = useState<0 | 90 | 180 | 270>(0);
+
+  // Viewport, Camera, & Diagnostics
+  const [cameraPreset, setCameraPreset] = useState<CameraPreset>('perspective');
+  const [cameraAngles, setCameraAngles] = useState({ angleH: 0.62, angleV: 0.54 });
   const [viewMode, setViewMode] = useState<ViewPerspective>('3d');
   const [timeOfDay, setTimeOfDay] = useState<TimeOfDay>('day');
   const [cutawayFloor, setCutawayFloor] = useState<CutawayFloor>('all');
-  const [inspectedBuilding, setInspectedBuilding] = useState<PlacedBuilding | null>(null);
-  const [furnishingBuilding, setFurnishingBuilding] = useState<PlacedBuilding | null>(null);
   const [unit, setUnit] = useState<MeasurementUnit>('metric');
   const [hoveredCoord, setHoveredCoord] = useState<{ x: number; z: number } | null>(null);
 
-  // Live Hovered Building identification for Status Bar
-  const hoveredBuilding = useMemo(() => {
-    if (!hoveredCoord) return null;
-    return (
-      buildings.find((b) => {
-        const def = BUILDING_MAP.get(b.defId);
-        if (!def) return false;
-        const w = b.customWidth || def.size[0];
-        const d = b.customDepth || def.size[1];
-        return (
-          hoveredCoord.x >= b.x &&
-          hoveredCoord.x < b.x + w &&
-          hoveredCoord.z >= b.z &&
-          hoveredCoord.z < b.z + d
-        );
-      }) || null
-    );
-  }, [hoveredCoord, buildings]);
+  // Selected building (defaults to Building_006 as in screenshot)
+  const [inspectedBuilding, setInspectedBuilding] = useState<PlacedBuilding | null>(
+    initialTemplate.buildings[0] || null
+  );
+  const [furnishingBuilding, setFurnishingBuilding] = useState<PlacedBuilding | null>(null);
 
-  // Vehicles state
+  // City tools toggles
+  const [isTrafficActive, setIsTrafficActive] = useState<boolean>(true);
+  const [isZoningActive, setIsZoningActive] = useState<boolean>(false);
+
+  // Vehicles placement
   const [isVehiclesOpen, setIsVehiclesOpen] = useState(false);
   const [vehicleToPlace, setVehicleToPlace] = useState<{ def: VehicleDefinition; color: string } | null>(null);
 
@@ -121,34 +116,81 @@ export default function App() {
   const [isPhotoOpen, setIsPhotoOpen] = useState(false);
   const [snapshotUrl, setSnapshotUrl] = useState<string | null>(null);
 
-  // Audio state
-  const [isMuted, setIsMuted] = useState(false);
-  const [isAmbiencePlaying, setIsAmbiencePlaying] = useState(false);
-
-  // Canvas ref for snapshot export
+  // Canvas ref
   const canvasRef = useRef<CityCanvasHandle>(null);
 
-  // Unclaimed milestones count
-  const unclaimedMilestonesCount = milestones.filter((m) => m.completed && !m.claimed).length;
+  // Unsaved changes tracker
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(true);
 
-  // Toggle Measurement Unit
-  const handleToggleUnit = useCallback(() => {
-    setUnit((prev) => (prev === 'metric' ? 'imperial' : 'metric'));
-    sound.playClick();
+  // Handle studio tool selection
+  const handleSelectStudioTool = useCallback((tool: StudioTool) => {
+    setCurrentStudioTool(tool);
+    if (tool === 'select') {
+      setToolMode('inspect');
+    } else if (tool === 'place_building') {
+      setToolMode('plan');
+      const bDef = BUILDING_MAP.get('res_condo') || BUILDINGS_CATALOG[0];
+      setSelectedDef(bDef);
+    } else if (tool === 'road') {
+      setToolMode('plan');
+      const road = BUILDING_MAP.get('road_paved');
+      if (road) setSelectedDef(road);
+    } else if (tool === 'zone') {
+      setToolMode('plan');
+      const apt = BUILDING_MAP.get('res_apartment');
+      if (apt) setSelectedDef(apt);
+    } else if (tool === 'terrain') {
+      setToolMode('plan');
+      const plaza = BUILDING_MAP.get('nat_plaza');
+      if (plaza) setSelectedDef(plaza);
+    } else if (tool === 'greenery') {
+      setToolMode('plan');
+      const park = BUILDING_MAP.get('nat_park_fountain');
+      if (park) setSelectedDef(park);
+    } else if (tool === 'water') {
+      setToolMode('plan');
+      const canal = BUILDING_MAP.get('nat_canal');
+      if (canal) setSelectedDef(canal);
+    } else if (tool === 'utilities') {
+      setToolMode('plan');
+      const infra = BUILDING_MAP.get('infra_substation');
+      if (infra) setSelectedDef(infra);
+    } else if (tool === 'demolish') {
+      setToolMode('demolish');
+    }
   }, []);
 
-  // Rotate blueprint
-  const handleRotate = useCallback(() => {
-    setRotation((r) => ((r + 90) % 360) as 0 | 90 | 180 | 270);
-    sound.playRotate();
+  // Live building move callback (from 3D TransformControls gizmo or numeric panel)
+  const handleBuildingMove = useCallback(
+    (instanceId: string, x: number, z: number, y?: number) => {
+      customizeBuilding(instanceId, { x, z, y });
+      setInspectedBuilding((prev) =>
+        prev && prev.instanceId === instanceId ? { ...prev, x, z, y } : prev
+      );
+      setHasUnsavedChanges(true);
+    },
+    [customizeBuilding]
+  );
+
+  // Camera angle update from Three.js scene
+  const handleCameraAngleChange = useCallback((angleH: number, angleV: number) => {
+    setCameraAngles({ angleH, angleV });
   }, []);
 
-  // Handle building selection from catalog
-  const handleSelectBuildingFromCatalog = useCallback((def: BuildingDefinition) => {
-    setSelectedDef(def);
-    setToolMode('plan');
-    setIsCatalogOpen(false);
-    setInspectedBuilding(null);
+  // Camera preset selector
+  const handleSelectCameraPreset = useCallback((preset: CameraPreset) => {
+    setCameraPreset(preset);
+    if (preset === 'top') {
+      setViewMode('2d_blueprint');
+    } else {
+      setViewMode('3d');
+    }
+    canvasRef.current?.setCameraPreset(preset);
+  }, []);
+
+  // Minimap jump-to-coord
+  const handleJumpToCoord = useCallback((coord: { x: number; z: number }) => {
+    canvasRef.current?.focusOnObject(coord);
     sound.playClick();
   }, []);
 
@@ -161,8 +203,28 @@ export default function App() {
         return;
       }
 
-      if (toolMode === 'plan' && selectedDef) {
-        // Check if tile is occupied
+      if (toolMode === 'demolish') {
+        const target = buildings.find((b) => {
+          const def = BUILDING_MAP.get(b.defId);
+          if (!def) return false;
+          const w = b.customWidth || def.size[0];
+          const d = b.customDepth || def.size[1];
+          return coord.x >= b.x && coord.x < b.x + w && coord.z >= b.z && coord.z < b.z + d;
+        });
+        if (target) {
+          removeBuilding(target.instanceId);
+          setHasUnsavedChanges(true);
+        }
+        return;
+      }
+
+      if (toolMode === 'inspect') {
+        setInspectedBuilding(null);
+        return;
+      }
+
+      // Placement tool (place_building, road, greenery, water, etc.)
+      if (selectedDef) {
         const isOccupied = buildings.some((b) => {
           const def = BUILDING_MAP.get(b.defId);
           if (!def) return false;
@@ -173,84 +235,42 @@ export default function App() {
 
         if (!isOccupied) {
           addBuilding(selectedDef.id, coord.x, coord.z, rotation);
+          setHasUnsavedChanges(true);
         }
-      } else if (toolMode === 'demolish') {
-        const target = buildings.find((b) => {
-          const def = BUILDING_MAP.get(b.defId);
-          if (!def) return false;
-          const w = b.customWidth || def.size[0];
-          const d = b.customDepth || def.size[1];
-          return coord.x >= b.x && coord.x < b.x + w && coord.z >= b.z && coord.z < b.z + d;
-        });
-        if (target) {
-          removeBuilding(target.instanceId);
-        }
-      } else if (toolMode === 'inspect') {
-        setInspectedBuilding(null);
       }
     },
-    [toolMode, selectedDef, vehicleToPlace, buildings, rotation, addBuilding, removeBuilding]
+    [toolMode, selectedDef, vehicleToPlace, buildings, rotation, addBuilding, removeBuilding, currentStudioTool]
   );
-
-  // Quick road constructor shortcut
-  const handleQuickRoad = useCallback(() => {
-    const road = BUILDING_MAP.get('road_paved');
-    if (road) {
-      setSelectedDef(road);
-      setToolMode('plan');
-      setVehicleToPlace(null);
-      sound.playClick();
-    }
-  }, []);
-
-  // Handle vehicle placement selection
-  const handleSelectVehicleToPlace = useCallback((vehDef: VehicleDefinition, color: string) => {
-    setVehicleToPlace({ def: vehDef, color });
-    setToolMode('vehicle');
-    setSelectedDef(null);
-    setInspectedBuilding(null);
-  }, []);
-
-  // Spawn random traffic fleet across roads
-  const handleSpawnTrafficFleet = useCallback(() => {
-    const roadBuildings = buildings.filter(
-      (b) => b.defId.includes('road') || b.defId.includes('bridge') || b.defId.includes('parking')
-    );
-    if (roadBuildings.length === 0) return;
-    const count = Math.min(roadBuildings.length, 12);
-    for (let i = 0; i < count; i++) {
-      const b = roadBuildings[i % roadBuildings.length];
-      const randomVeh = VEHICLES_CATALOG[Math.floor(Math.random() * VEHICLES_CATALOG.length)];
-      canvasRef.current?.spawnVehicle(randomVeh.id, { x: b.x, z: b.z });
-    }
-  }, [buildings]);
 
   // Building clicked on canvas
   const handleBuildingClick = useCallback(
     (b: PlacedBuilding) => {
       if (toolMode === 'demolish') {
         removeBuilding(b.instanceId);
+        setHasUnsavedChanges(true);
       } else {
         setInspectedBuilding(b);
-        setSelectedDef(null);
         sound.playClick();
       }
     },
     [toolMode, removeBuilding]
   );
 
-  // Duplicate building handler (Core Requirement 9)
-  const handleDuplicateBuilding = useCallback((instanceId: string) => {
-    const clone = duplicateBuilding(instanceId);
-    if (clone) {
-      setInspectedBuilding(clone);
-    }
-  }, [duplicateBuilding]);
+  // Duplicate building handler
+  const handleDuplicateBuilding = useCallback(
+    (instanceId: string) => {
+      const clone = duplicateBuilding(instanceId);
+      if (clone) {
+        setInspectedBuilding(clone);
+        setHasUnsavedChanges(true);
+      }
+    },
+    [duplicateBuilding]
+  );
 
   // Real-Time Interior Studio Mode
   const handleOpenInterior = useCallback((b: PlacedBuilding) => {
     setFurnishingBuilding(b);
-    setInspectedBuilding(null);
     sound.playClick();
   }, []);
 
@@ -258,31 +278,55 @@ export default function App() {
     (buildingId: string, interior: BuildingInterior) => {
       saveBuildingInterior(buildingId, interior);
       setFurnishingBuilding(null);
+      setHasUnsavedChanges(true);
     },
     [saveBuildingInterior]
   );
 
-  const handleDeductFunds = useCallback((amount: number) => {
-    deductFunds(amount);
-  }, [deductFunds]);
-
-  const handleRefundFunds = useCallback((amount: number) => {
-    refundFunds(amount);
-  }, [refundFunds]);
-
-  // Toggle 2D Blueprint / 3D Isometric View
-  const handleToggleViewMode = useCallback(() => {
-    setViewMode((prev) => (prev === '3d' ? '2d_blueprint' : '3d'));
-    sound.playClick();
-  }, []);
-
-  // Toggle First-Person Exploration View (Core Requirement 1)
+  // First-Person Walk
   const handleToggleFirstPerson = useCallback(() => {
     setViewMode((prev) => (prev === 'first_person' ? '3d' : 'first_person'));
     sound.playClick();
   }, []);
 
-  // Capture snapshot photo
+  // Save Project to localStorage
+  const handleSaveProject = useCallback(() => {
+    try {
+      const projectData = {
+        version: '2024.5.1',
+        name: 'Downtown Block A',
+        savedAt: Date.now(),
+        buildings,
+        funds: metrics.funds,
+      };
+      localStorage.setItem('urbancraft_saved_project', JSON.stringify(projectData));
+      setHasUnsavedChanges(false);
+      sound.playPlace();
+    } catch (err) {
+      console.error('Failed to save project:', err);
+    }
+  }, [buildings, metrics.funds]);
+
+  // Export Project JSON
+  const handleExportProject = useCallback(() => {
+    const projectData = {
+      version: '2024.5.1',
+      name: 'Downtown Block A',
+      savedAt: Date.now(),
+      buildings,
+      funds: metrics.funds,
+    };
+    const blob = new Blob([JSON.stringify(projectData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `urbancraft-5d-downtown-block-a-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    sound.playClick();
+  }, [buildings, metrics.funds]);
+
+  // Capture Snapshot Photo
   const handleOpenPhoto = useCallback(() => {
     if (canvasRef.current) {
       const url = canvasRef.current.captureSnapshot();
@@ -292,19 +336,26 @@ export default function App() {
     }
   }, []);
 
-  // Audio toggles
-  const handleToggleMute = useCallback(() => {
-    const next = !isMuted;
-    setIsMuted(next);
-    sound.setMuted(next);
-  }, [isMuted]);
+  // Traffic fleet toggle
+  const handleToggleTraffic = useCallback(() => {
+    const next = !isTrafficActive;
+    setIsTrafficActive(next);
+    if (next) {
+      const roadBuildings = buildings.filter(
+        (b) => b.defId.includes('road') || b.defId.includes('bridge')
+      );
+      if (roadBuildings.length > 0) {
+        for (let i = 0; i < Math.min(8, roadBuildings.length); i++) {
+          const b = roadBuildings[i];
+          const veh = VEHICLES_CATALOG[i % VEHICLES_CATALOG.length];
+          canvasRef.current?.spawnVehicle(veh.id, { x: b.x, z: b.z });
+        }
+      }
+    }
+    sound.playClick();
+  }, [isTrafficActive, buildings]);
 
-  const handleToggleAmbience = useCallback(() => {
-    const active = sound.toggleAmbience();
-    setIsAmbiencePlaying(active);
-  }, []);
-
-  // Keyboard shortcuts (Undo, Redo, Walk, Duplicate, Rotate, Speed)
+  // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
@@ -321,227 +372,184 @@ export default function App() {
       } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y')) {
         e.preventDefault();
         redo();
-      } else if (e.key === 'r' || e.key === 'R') {
-        handleRotate();
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault();
+        handleSaveProject();
       } else if (e.key === 'f' || e.key === 'F') {
         handleToggleFirstPerson();
       } else if (e.key === 'd' || e.key === 'D') {
         if (inspectedBuilding) {
           handleDuplicateBuilding(inspectedBuilding.instanceId);
         }
+      } else if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (inspectedBuilding) {
+          removeBuilding(inspectedBuilding.instanceId);
+          setInspectedBuilding(null);
+        }
       } else if (e.key === 'Escape') {
         if (viewMode === 'first_person') {
           setViewMode('3d');
         }
-        setSelectedDef(null);
-        setInspectedBuilding(null);
         setIsCatalogOpen(false);
         setIsCustomBuildingOpen(false);
         setIsPoliciesOpen(false);
         setIsMilestonesOpen(false);
         setIsTemplatesOpen(false);
         setIsPhotoOpen(false);
-      } else if (e.key === 'b' || e.key === 'B') {
-        handleToggleViewMode();
-      } else if (e.key === ' ') {
-        e.preventDefault();
-        setGameSpeed((s) => (s === 0 ? 1 : 0));
-      } else if (e.key === '1') {
-        setGameSpeed(1);
-      } else if (e.key === '2') {
-        setGameSpeed(2);
-      } else if (e.key === '3') {
-        setGameSpeed(3);
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [
-    handleRotate,
-    handleToggleViewMode,
-    handleToggleFirstPerson,
-    handleDuplicateBuilding,
-    inspectedBuilding,
-    viewMode,
     undo,
     redo,
-    setGameSpeed,
+    handleSaveProject,
+    handleToggleFirstPerson,
+    handleDuplicateBuilding,
+    removeBuilding,
+    inspectedBuilding,
+    viewMode,
   ]);
 
   return (
-    <div className="relative w-screen h-screen flex flex-col bg-slate-950 overflow-hidden font-sans select-none">
-      {/* 1. Universal Top Navigation Bar */}
+    <div className="relative w-screen h-screen flex flex-col bg-[#070b14] overflow-hidden font-sans select-none text-slate-100">
+      {/* 1. Top Bar */}
       <TopBar
-        viewMode={viewMode}
-        onToggleViewMode={handleToggleViewMode}
-        onToggleFirstPerson={handleToggleFirstPerson}
-        onOpenPolicies={() => {
-          setIsPoliciesOpen(true);
-          sound.playClick();
-        }}
-        onOpenMilestones={() => {
-          setIsMilestonesOpen(true);
-          sound.playClick();
-        }}
-        onOpenTemplates={() => {
-          setIsTemplatesOpen(true);
-          sound.playClick();
-        }}
-        onOpenPhoto={handleOpenPhoto}
-        unclaimedMilestonesCount={unclaimedMilestonesCount}
-        isFreeMode={isFreeMode}
-        onToggleFreeMode={toggleFreeMode}
-        onClearToScratch={clearToScratch}
-        unit={unit}
-        onToggleUnit={handleToggleUnit}
-      />
-
-      {/* 2. City HUD & Speed Bar */}
-      <HudBar
-        metrics={metrics}
-        timeOfDay={timeOfDay}
-        onSetTimeOfDay={(t) => {
-          setTimeOfDay(t);
-          sound.playClick();
-        }}
-        gameSpeed={gameSpeed}
-        onSetGameSpeed={(s) => {
-          setGameSpeed(s);
-          sound.playClick();
-        }}
-        isMuted={isMuted}
-        onToggleMute={handleToggleMute}
-        isAmbiencePlaying={isAmbiencePlaying}
-        onToggleAmbience={handleToggleAmbience}
-        isFreeMode={isFreeMode}
-      />
-
-      {/* 3. Live News Ticker */}
-      <NewsTicker newsLog={newsLog} />
-
-      {/* 4. Three.js 3D & 2D Blueprint Interactive Canvas */}
-      <CityCanvas
-        ref={canvasRef}
-        buildings={buildings}
-        toolMode={toolMode}
-        selectedDefId={selectedDef?.id || null}
-        rotation={rotation}
-        viewMode={viewMode}
-        timeOfDay={timeOfDay}
-        cutawayFloor={cutawayFloor}
-        selectedBuilding={inspectedBuilding}
-        onTileClick={handleTileClick}
-        onTileHover={setHoveredCoord}
-        onBuildingClick={handleBuildingClick}
-        onExitFirstPerson={() => setViewMode('3d')}
-      />
-
-      {/* 5. Floating Architectural Toolbar */}
-      <Toolbar
-        toolMode={toolMode}
-        onSetToolMode={(mode) => {
-          setToolMode(mode);
-          if (mode !== 'vehicle') setVehicleToPlace(null);
-          sound.playClick();
-        }}
-        selectedDef={selectedDef}
-        onClearSelectedDef={() => {
-          setSelectedDef(null);
-          setVehicleToPlace(null);
-        }}
-        onOpenCatalog={() => {
-          setIsCatalogOpen((v) => !v);
-          sound.playClick();
-        }}
-        onOpenCustomBuilder={() => {
-          setIsCustomBuildingOpen(true);
-          sound.playClick();
-        }}
-        onQuickRoad={handleQuickRoad}
-        onOpenVehicles={() => {
-          setIsVehiclesOpen(true);
-          sound.playClick();
-        }}
-        rotation={rotation}
-        onRotate={handleRotate}
-        viewMode={viewMode}
-        onToggleViewMode={handleToggleViewMode}
-        onToggleFirstPerson={handleToggleFirstPerson}
-        hasSelectedBuilding={!!inspectedBuilding}
-        onOpenInterior={() => inspectedBuilding && handleOpenInterior(inspectedBuilding)}
-        cutawayFloor={cutawayFloor}
-        onSetCutawayFloor={setCutawayFloor}
-        isFreeMode={isFreeMode}
+        projectName="Downtown Block A"
+        hasUnsavedChanges={hasUnsavedChanges}
+        onNew={clearToScratch}
+        onSave={handleSaveProject}
+        onExport={handleExportProject}
         onUndo={undo}
         onRedo={redo}
         canUndo={canUndo}
         canRedo={canRedo}
+        onOpenPhoto={handleOpenPhoto}
+        onOpenSettings={() => setIsPoliciesOpen(true)}
       />
 
-      {/* 5.5 Professional Architectural Bottom Status Bar (Core Requirement 2 & 8) */}
+      {/* 2. Main Studio Workspace */}
+      <div className="flex-1 flex overflow-hidden p-2 gap-2 min-h-0 bg-[#070b14]">
+        {/* Left Sidebar Toolbar */}
+        <PlannerSidebarLeft
+          currentTool={currentStudioTool}
+          onSelectTool={handleSelectStudioTool}
+          onOpenTraffic={handleToggleTraffic}
+          onOpenPedestrian={handleToggleFirstPerson}
+          onToggleZoning={() => setIsZoningActive((z) => !z)}
+          onOpenAnalytics={() => setIsMilestonesOpen(true)}
+          isTrafficActive={isTrafficActive}
+          isZoningActive={isZoningActive}
+          onOpenCatalog={() => setIsCatalogOpen(true)}
+        />
+
+        {/* Center 3D Viewport Framed Container */}
+        <div className="flex-1 relative rounded-xl border border-slate-800/90 overflow-hidden bg-slate-950 shadow-inner flex flex-col">
+          {/* Interactive 3D Canvas */}
+          <CityCanvas
+            ref={canvasRef}
+            buildings={buildings}
+            toolMode={toolMode}
+            selectedDefId={selectedDef?.id || null}
+            rotation={rotation}
+            viewMode={viewMode}
+            timeOfDay={timeOfDay}
+            cutawayFloor={cutawayFloor}
+            selectedBuilding={inspectedBuilding}
+            onTileClick={handleTileClick}
+            onTileHover={setHoveredCoord}
+            onBuildingClick={handleBuildingClick}
+            onBuildingMove={handleBuildingMove}
+            onCameraAngleChange={handleCameraAngleChange}
+            onExitFirstPerson={() => setViewMode('3d')}
+          />
+
+          {/* Top-Left Viewport Camera Controls [Perspective, Top, Front, Orbit] */}
+          <ViewportCameraControls
+            currentPreset={cameraPreset}
+            onSelectPreset={handleSelectCameraPreset}
+          />
+
+          {/* Bottom-Left 3D XYZ Orientation Gizmo */}
+          <ViewportGizmo
+            angleH={cameraAngles.angleH}
+            angleV={cameraAngles.angleV}
+          />
+
+          {/* Bottom-Right Radar Minimap */}
+          <PlannerMinimap
+            buildings={buildings}
+            onJumpToCoord={handleJumpToCoord}
+            selectedBuilding={inspectedBuilding}
+          />
+        </div>
+
+        {/* Right Properties Panel */}
+        <PlannerPropertiesRight
+          building={inspectedBuilding}
+          allBuildings={buildings}
+          onCustomize={customizeBuilding}
+          onDemolish={removeBuilding}
+          onDuplicate={handleDuplicateBuilding}
+          onOpenInterior={handleOpenInterior}
+          unit={unit}
+        />
+      </div>
+
+      {/* 3. Bottom Status Bar */}
       <BottomStatusBar
-        hoveredCoord={hoveredCoord}
+        statusMessage="Ready"
+        snapSetting="Grid 1m"
+        layerSetting="Buildings"
+        cameraAngleDeg={(cameraAngles.angleV * 180) / Math.PI}
         selectedBuilding={inspectedBuilding}
-        hoveredBuilding={hoveredBuilding}
-        selectedDef={selectedDef}
-        toolMode={toolMode}
-        viewMode={viewMode}
-        unit={unit}
-        onToggleUnit={handleToggleUnit}
-        totalBuildingsCount={buildings.length}
-        gameSpeed={gameSpeed}
+        cursorCoord={hoveredCoord}
+        scaleRatio="1:200"
+        version="2024.5.1"
       />
 
-      {/* 6. Building & Infrastructure Catalog Drawer */}
+      {/* 4. Modals & Dialogs */}
       <CatalogDrawer
         isOpen={isCatalogOpen}
         onClose={() => setIsCatalogOpen(false)}
         selectedDefId={selectedDef?.id || null}
-        onSelectBuilding={handleSelectBuildingFromCatalog}
+        onSelectBuilding={(def) => {
+          setSelectedDef(def);
+          setCurrentStudioTool('place_building');
+          setToolMode('plan');
+          setIsCatalogOpen(false);
+          sound.playClick();
+        }}
         currentFunds={metrics.funds}
         isFreeMode={isFreeMode}
       />
 
-      {/* 6.2 Custom Building Scratch Studio Modal (Core Requirement 2) */}
       <CustomBuildingModal
         isOpen={isCustomBuildingOpen}
         onClose={() => setIsCustomBuildingOpen(false)}
         onCreateCustomBuilding={(params) => {
-          // Place near city center or at (8, 8)
           addCustomBuilding({
             ...params,
-            x: 8,
-            z: 8,
+            x: 10,
+            z: 11,
           });
         }}
         unit={unit}
       />
 
-      {/* 6.5 Real-Time Vehicles Showroom & Fleet Modal */}
       <VehiclesModal
         isOpen={isVehiclesOpen}
         onClose={() => setIsVehiclesOpen(false)}
-        onSelectVehicleToPlace={handleSelectVehicleToPlace}
-        onSpawnTrafficFleet={handleSpawnTrafficFleet}
+        onSelectVehicleToPlace={(veh, color) => {
+          setVehicleToPlace({ def: veh, color });
+          setToolMode('vehicle');
+          setIsVehiclesOpen(false);
+        }}
+        onSpawnTrafficFleet={handleToggleTraffic}
         isFreeMode={isFreeMode}
       />
 
-      {/* 7. Building Inspector & Level/Color/Dimensions Customizer */}
-      <InspectorModal
-        building={inspectedBuilding}
-        allBuildings={buildings}
-        onClose={() => setInspectedBuilding(null)}
-        onUpgrade={upgradeBuilding}
-        onCustomize={customizeBuilding}
-        onDemolish={removeBuilding}
-        onDuplicate={handleDuplicateBuilding}
-        onOpenInterior={handleOpenInterior}
-        currentFunds={metrics.funds}
-        unit={unit}
-      />
-
-      {/* 7.5 Real-Time Floor-Plan & Interior Studio */}
       <InteriorStudioModal
         isOpen={!!furnishingBuilding}
         onClose={() => setFurnishingBuilding(null)}
@@ -549,15 +557,14 @@ export default function App() {
         onSaveInterior={handleSaveInterior}
         currentFunds={metrics.funds}
         isFreeMode={isFreeMode}
-        onDeductFunds={handleDeductFunds}
-        onRefundFunds={handleRefundFunds}
+        onDeductFunds={deductFunds}
+        onRefundFunds={refundFunds}
         onOpenPhoto={(url) => {
           setSnapshotUrl(url);
           setIsPhotoOpen(true);
         }}
       />
 
-      {/* 8. City Budget & Taxation Modal */}
       <PolicyModal
         isOpen={isPoliciesOpen}
         onClose={() => setIsPoliciesOpen(false)}
@@ -568,7 +575,6 @@ export default function App() {
         metrics={metrics}
       />
 
-      {/* 9. City Milestones & Quests Modal */}
       <MilestonesModal
         isOpen={isMilestonesOpen}
         onClose={() => setIsMilestonesOpen(false)}
@@ -578,16 +584,19 @@ export default function App() {
         buildingCount={buildings.length}
       />
 
-      {/* 10. Projects, Save/Load & Templates Modal */}
       <TemplatesModal
         isOpen={isTemplatesOpen}
         onClose={() => setIsTemplatesOpen(false)}
-        onLoadTemplate={loadCity}
+        onLoadTemplate={(newBuildings, startingFunds) => {
+          loadCity(newBuildings, startingFunds);
+          if (newBuildings.length > 0) {
+            setInspectedBuilding(newBuildings[0]);
+          }
+        }}
         currentBuildings={buildings}
         currentFunds={metrics.funds}
       />
 
-      {/* 11. High-Res Snapshot Photo Modal */}
       <PhotoModal
         isOpen={isPhotoOpen}
         onClose={() => setIsPhotoOpen(false)}

@@ -164,6 +164,8 @@ export interface PlacedBuilding {
   metalness?: number;
   opacity?: number;
   isLocked?: boolean;
+  balcony?: boolean;
+  windowsStyle?: 'modern_glass' | 'panoramic' | 'ribbon';
 }
 
 export interface CityMetrics {
@@ -197,7 +199,7 @@ export interface ServiceFunding {
 
 export type ToolMode = 'plan' | 'inspect' | 'demolish' | 'camera' | 'vehicle' | 'road_segment' | 'custom_builder' | 'wall_draw';
 export type ViewPerspective = '3d' | '2d_blueprint' | 'first_person';
-export type CameraPreset = 'orbit' | 'top' | 'front' | 'side' | 'iso';
+export type CameraPreset = 'orbit' | 'top' | 'front' | 'side' | 'iso' | 'perspective';
 export type RenderQuality = 'ultra' | 'performance';
 export type SnappingMode = 0.5 | 1.0 | 2.0 | 0;
 export type TimeOfDay = 'day' | 'sunset' | 'night';
